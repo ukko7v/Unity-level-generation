@@ -1,0 +1,10 @@
+using UnityEngine;
+
+public class Colors : MonoBehaviour
+{
+    public Color[] colors;
+    public GameObject[] backgrounds;
+
+    [HideInInspector]
+    public bool constbg = false;
+}

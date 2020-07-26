@@ -1,0 +1,240 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using UnityEngine;
+
+public class LevelGenerator : MonoBehaviour
+{
+    public Player player; // The player script
+    public Texture2D map; // map of the 1-color tiles to be deciphered
+    public GameObject[] gameobjects; // tile gameobjects with sprite renderers, Colors script featuring foreground and backgrounds colors and a bool for constant background. Optionally also an edge collider2D
+
+    private Vector2Int playerPos; // player's position int
+    private Vector2 _playerPos; // player's position float
+    private const int radius = 8; // radius of generation
+
+    private Dictionary<GameObject, Pair> prefabs; // prefabs to be populated with gameobjects and their foreground and background colors as pairs
+    private Dictionary<Vector2, List<GameObject>> posDictionary; // Dictionary of all active tile positions in the level
+    private Dictionary<Vector2, List<GameObject>> tilePosDictionary; // Dictionary of all active tile positions in the level
+    private Dictionary<Color, List<KeyValuePair<GameObject, Pair>>> colorDictionary; // Dictionary of all colors and the gameobjects associated with them
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        prefabs = new Dictionary<GameObject, Pair>();
+        posDictionary = new Dictionary<Vector2, List<GameObject>>();
+        tilePosDictionary = new Dictionary<Vector2, List<GameObject>>();
+        colorDictionary = new Dictionary<Color, List<KeyValuePair<GameObject, Pair>>>();
+
+        AssignPrefabs(); // populate prefabs dictionary
+
+        playerPos = new Vector2Int((int)Mathf.Round(player.transform.position.x), (int)Mathf.Round(player.transform.position.y)) + new Vector2Int(map.width / 2, map.height / 2); // center map to player
+        _playerPos = (Vector2)player.transform.position + new Vector2(map.width / 2, map.height / 2);
+
+        GenerateLevel();
+    }
+
+    private void AssignPrefabs()
+    {
+        foreach (GameObject go in gameobjects)
+        {
+            prefabs.Add(go, new Pair(go.GetComponent<Colors>().colors, go.GetComponent<Colors>().backgrounds));
+        }
+    }
+
+    void Update()
+    {
+        _playerPos = (Vector2)player.transform.position + new Vector2(map.width / 2, map.height / 2);
+        float movementDelta = (playerPos - _playerPos).magnitude;
+        if (movementDelta >= 1)
+        {
+            playerPos = new Vector2Int((int)Mathf.Round(player.transform.position.x), (int)Mathf.Round(player.transform.position.y)) + new Vector2Int(map.width / 2, map.height / 2);
+            GenerateLevel();
+        }
+    }
+
+    void GenerateLevel()
+    {
+        CheckBounds(); // create bounds around player and remove any additional tiles from level
+        
+        for (int y = playerPos.y - radius; y < playerPos.y + radius; y++)
+        {
+            for (int x = playerPos.x - radius; x < playerPos.x + radius; x++)
+            {
+                if (!Generated(new Vector2(x, y)))
+                {
+                    if (tilePosDictionary.ContainsKey(new Vector2(x, y))) // check if it has already been created
+                    {
+                        foreach (GameObject go in tilePosDictionary[new Vector2(x, y)])
+                            go.SetActive(true);
+                    }
+                    else
+                        GenerateTile(x, y);
+                }
+            }
+        }
+    }
+
+    private void CheckBounds()
+    {
+        Bounds b = new Bounds(new Vector3(playerPos.x - 0.5f, playerPos.y - 0.5f), new Vector3(radius * 2, radius * 2, 0));
+        List<Vector2> toDestroy = new List<Vector2>();
+        foreach (Vector2 pos in posDictionary.Keys)
+        {
+            if (!tilePosDictionary.ContainsKey(pos))
+                tilePosDictionary.Add(pos, posDictionary[pos]);
+
+            if (!b.Contains(pos))
+            {
+                toDestroy.Add(pos);
+                foreach (GameObject prefab in posDictionary[pos])
+                {
+                    prefab.SetActive(false);
+                }
+            }
+        }
+
+        foreach (Vector2 pos in toDestroy)
+        {
+            posDictionary.Remove(pos);
+        }
+    }
+
+    bool Generated(Vector2 pos)
+    {
+        if (posDictionary.ContainsKey(pos)) // if it is in current active tiles
+            return true;
+        return false;
+    }
+
+    void GenerateTile(int x, int y)
+    {
+        Color pixelColor = map.GetPixel(x, y); // store current pixel's color
+
+        if (pixelColor.a == 0) // skip if transparent
+            return;
+
+        posDictionary[new Vector2(x, y)] = new List<GameObject>();
+
+        KeyValuePair<GameObject, Pair> foreground = new KeyValuePair<GameObject, Pair>();
+        GameObject background = null;
+
+        if (colorDictionary.Keys.Contains(pixelColor)) // if it's color has already been encountered
+        {
+            foreach (var prefab in colorDictionary[pixelColor]) // store at least the foreground object
+            {
+                if (foreground.Key == null)
+                {
+                    foreground = prefab;
+                }
+                else
+                {
+                    background = prefab.Key;
+                }
+            }
+        }
+
+        if (foreground.Key == null) // if earlier didn't do the trick
+        {
+            colorDictionary[pixelColor] = new List<KeyValuePair<GameObject, Pair>>();
+
+            foreach (var prefab in prefabs)
+            {
+                foreach (Color color in prefab.Value.item1) // iterate foreground colors of each prefab
+                {
+                    if (color == pixelColor) // if it matches the pixel color
+                    {
+                        foreground = prefab;
+                    }
+                }
+            }
+            foreground.Key.GetComponent<Colors>().constbg = false; // wont set by default so set here
+        }
+
+        if (foreground.Key != null) // if a foreground object is located
+        {
+            if (background == null)
+            {
+                background = GetBackground(foreground, new Vector2(x, y)); // final attempt to get background
+            }
+
+            if (colorDictionary[pixelColor].Count == 0) // if there are no elements in the color dictionary for the pixel color
+            {
+                colorDictionary[pixelColor].Add(foreground); // always same foreground for color (...)
+                if (foreground.Key.GetComponent<Colors>().constbg || background == null) // if background is constant such as constbg and null
+                {
+                    colorDictionary[pixelColor].Add(new KeyValuePair<GameObject, Pair>(background, null));
+                }
+            }
+
+            Vector2 position = new Vector2(x - map.width / 2, y - map.height / 2); // offset to center map to center of scene
+
+            var tmp = Instantiate(foreground.Key, position, Quaternion.identity, transform);
+            posDictionary[new Vector2(x, y)].Add(tmp);
+
+            if (background != null) // if there is a background to be instantiated
+            {
+                tmp = Instantiate(background, position, Quaternion.identity, transform);
+                posDictionary[new Vector2(x, y)].Add(tmp);
+            }
+        }
+    }
+
+    private GameObject GetBackground(KeyValuePair<GameObject, Pair> prefab, Vector2 pos)
+    {
+        // different methods will be added later
+        return CheckAround(pos, prefab); // get the most encountered tile out of possible background colors
+    }
+
+    private GameObject CheckAround(Vector2 pos, KeyValuePair<GameObject, Pair> prefab)
+    {
+        if (!prefab.Key.GetComponent<Colors>().constbg) // dont attempt again if the background is constant
+        {
+            if (prefab.Value.item2.Length == 0)
+            {
+                prefab.Key.GetComponent<Colors>().constbg = true;
+                return null;
+            }
+            else if (prefab.Value.item2.Length == 1)
+            {
+                prefab.Key.GetComponent<Colors>().constbg = true; // null and single backgrounds will be constant
+                return prefab.Value.item2[0];
+            }
+            else // if there are multiple possible backgrounds
+            {
+                int[] score = new int[prefab.Value.item2.Length];
+                for (int i = 0; i < 9; i++) // create a 3x3 excluding middle tile (the current)
+                {
+                    if (i == 4) continue;
+                    int xi = (i % 3) - 1;
+                    int yi = (i / 3) - 1;
+
+                    for (int j = 0; j < prefab.Value.item2.Length; j++)
+                    {
+                        foreach (Color col in prefab.Value.item2[j].GetComponent<Colors>().colors)
+                        {
+                            if (col == map.GetPixel((int)pos.x + xi, (int)pos.y + yi))
+                            {
+                                score[j]++;
+                            }
+                        }
+                    }
+                }
+                return prefab.Value.item2[Array.IndexOf(score, score.Max())]; // return the tile that was encountered most often
+            }
+        }
+        return null;
+    }
+}
+
+public class Pair // custom mutable Pair class
+{
+    public Color[] item1;
+    public GameObject[] item2;
+
+    public Pair(Color[] item1, GameObject[] item2)
+    {
+        this.item1 = item1;
+        this.item2 = item2;
+    }
+}
